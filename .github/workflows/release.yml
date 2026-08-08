@@ -1,0 +1,69 @@
+name: Release
+
+# Tag a commit `vX.Y.Z` (matching eqclip/__version__.py) and push the tag
+# to build EqClip.app and publish it as a GitHub Release, e.g.:
+#   git tag v0.2.0 && git push origin v0.2.0
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so --generate-notes can find the previous tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install py2app
+
+      - name: Verify tag matches eqclip/__version__.py
+        run: |
+          source .venv/bin/activate
+          PKG_VERSION="$(python3 -c 'from eqclip.__version__ import __version__; print(__version__)')"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match eqclip/__version__.py ($PKG_VERSION). Bump the version file first."
+            exit 1
+          fi
+
+      - name: Fix google namespace package for py2app
+        run: |
+          source .venv/bin/activate
+          SITE_PACKAGES="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
+          touch "$SITE_PACKAGES/google/__init__.py"
+
+      - name: Build EqClip.app
+        run: |
+          source .venv/bin/activate
+          python3 setup.py py2app
+          test -d "dist/EqClip.app" || (echo "::error::dist/EqClip.app was not produced" && exit 1)
+
+      - name: Zip the app bundle
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent EqClip.app "EqClip-${GITHUB_REF_NAME}-macOS.zip"
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            "dist/EqClip-${GITHUB_REF_NAME}-macOS.zip" \
+            --title "EqClip ${GITHUB_REF_NAME}" \
+            --generate-notes

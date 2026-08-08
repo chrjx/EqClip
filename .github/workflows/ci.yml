@@ -1,0 +1,46 @@
+name: CI
+
+# Build-check on every push/PR so packaging regressions (e.g. the
+# google-genai namespace-package issue py2app chokes on) are caught before
+# they'd only surface at release time.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install py2app
+
+      - name: Byte-compile
+        run: |
+          source .venv/bin/activate
+          python3 -m py_compile main.py setup.py eqclip/*.py
+
+      - name: Fix google namespace package for py2app
+        run: |
+          source .venv/bin/activate
+          SITE_PACKAGES="$(python3 -c 'import site; print(site.getsitepackages()[0])')"
+          touch "$SITE_PACKAGES/google/__init__.py"
+
+      - name: Build .app (packaging smoke test)
+        run: |
+          source .venv/bin/activate
+          python3 setup.py py2app
+          test -d "dist/EqClip.app" || (echo "::error::dist/EqClip.app was not produced" && exit 1)
