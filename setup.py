@@ -35,7 +35,14 @@ OPTIONS = {
         "google.oauth2",
         "requests",
         "eqclip",
+        "cffi",
     ],
+    # google.auth pulls in cryptography -> cffi at runtime (client-auth
+    # setup, not just OAuth flows), but modulegraph's static analysis
+    # never traces cffi's compiled _cffi_backend extension, so the built
+    # app crashes with "No module named '_cffi_backend'" the moment
+    # genai.Client() is constructed. Force it in explicitly.
+    "includes": ["_cffi_backend"],
 }
 
 setup(
