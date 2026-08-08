@@ -119,6 +119,13 @@ Developer account), the first launch will warn "unidentified developer" —
 right-click the app -> **Open** once to bypass Gatekeeper, then grant
 Accessibility permission to `EqClip.app` as in step 4.
 
+To hand a build to someone else instead of installing it yourself, use
+`./package.sh` — builds the same `.app` and wraps it in a proper
+`EqClip.dmg` (the double-click-and-drag-to-Applications installer real
+Mac apps ship as), using [`create-dmg`](https://github.com/create-dmg/create-dmg)
+if installed (`brew install create-dmg`) for the nice drag-to-Applications
+layout, or a plain disk image otherwise.
+
 ## Configuration
 
 Settings persist in
@@ -139,9 +146,9 @@ directly in the JSON file if you want silent clipboard-only behavior.
 
 Tagged commits are built and published automatically by
 `.github/workflows/release.yml` (see Development below) — grab the
-`.zip` from the repo's GitHub Releases page, unzip, and drag `EqClip.app`
-into `/Applications` (same Gatekeeper right-click-Open step as installing
-locally, since these builds aren't signed either).
+`.dmg` from the repo's GitHub Releases page, open it, and drag `EqClip.app`
+onto the Applications shortcut (same Gatekeeper right-click-Open step as
+installing locally, since these builds aren't signed either).
 
 EqClip checks for a newer release on launch and via **Check for
 Updates...** in the tray menu. It only compares version numbers against
@@ -194,12 +201,12 @@ to the log, only sizes/timings/metadata.
 ## Development
 
 - `.github/workflows/ci.yml` runs on every push/PR to `main`: byte-compiles
-  the project and does a full `py2app` build as a packaging smoke test
+  the project, then runs `./package.sh` as a full packaging smoke test
   (this is the step that would have caught the google-genai
   namespace-package issue below before it ever reached a release).
 - `.github/workflows/release.yml` runs when a tag matching `vX.Y.Z` is
-  pushed: builds `EqClip.app`, zips it, and publishes it as a GitHub
-  Release with auto-generated notes.
+  pushed: runs the same `./package.sh` to produce `EqClip.dmg`, then
+  publishes it as a GitHub Release with auto-generated notes.
 
 To cut a release:
 ```bash
@@ -217,9 +224,10 @@ The release workflow refuses to run if the tag doesn't match
 **Note on `google-genai` + py2app**: the `google` package it installs
 under is a PEP 420 namespace package (no `__init__.py`), which py2app's
 bootstrap resolver can't handle directly (`ImportError: No module named
-'google'`). Both `install.sh` and the CI workflows work around this by
-touching an empty `__init__.py` into the installed `google/` directory
-before building, which is safe since `google.genai`/`google.auth`/
+'google'`). Both `install.sh` and `package.sh` (and so the CI workflows,
+which run it) work around this by touching an empty `__init__.py` into
+the installed `google/` directory before building, which is safe since
+`google.genai`/`google.auth`/
 `google.oauth2` keep their own real `__init__.py` files and resolve as
 subpackages exactly the same way either way.
 

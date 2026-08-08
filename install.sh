@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build EqClip and install it to /Applications.
+# Build EqClip and install it to /Applications, for your own everyday use.
+# To instead produce a DMG you can hand to someone else, use ./package.sh.
 #
 #   ./install.sh                 build + install
 #   ./install.sh --login-item    also start EqClip automatically at login
