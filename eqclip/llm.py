@@ -72,17 +72,35 @@ _REQUEST_TIMEOUT_S = 30
 
 def _call_with_timeout(fn, timeout_s, *args, **kwargs):
     result_q = queue.Queue(maxsize=1)
+    t0 = time.monotonic()
+    gave_up = threading.Event()
 
     def _worker():
         try:
-            result_q.put(("ok", fn(*args, **kwargs)))
+            result = ("ok", fn(*args, **kwargs))
         except Exception as exc:  # noqa: BLE001 - forward any error to the caller
-            result_q.put(("error", exc))
+            result = ("error", exc)
+        result_q.put(result)
+        # If the caller already gave up waiting, this is the only place we
+        # ever find out what actually happened to the abandoned call -- log
+        # it so a client-side timeout isn't a dead end for debugging.
+        if gave_up.is_set():
+            elapsed = time.monotonic() - t0
+            kind, payload = result
+            log.info(
+                "Abandoned call actually finished %.2fs after we gave up "
+                "waiting (%.2fs total) -- %s: %r",
+                elapsed - timeout_s,
+                elapsed,
+                kind,
+                payload,
+            )
 
     threading.Thread(target=_worker, daemon=True).start()
     try:
         kind, payload = result_q.get(timeout=timeout_s)
     except queue.Empty:
+        gave_up.set()
         raise TimeoutError(f"exceeded {timeout_s}s client-side timeout") from None
     if kind == "error":
         raise payload
