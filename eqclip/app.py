@@ -87,6 +87,11 @@ class EqClipApp(rumps.App):
             self.cfg["hotkey"],
         )
 
+        # Only one transcription in flight at a time -- otherwise copying a
+        # new screenshot while a slow request is still retrying kicks off a
+        # second overlapping pipeline, which just confuses the logs/UX.
+        self._processing_lock = threading.Lock()
+
         self.watcher = ClipboardWatcher(on_image=self._handle_image)
         self.watcher.set_enabled(self.enabled)
         self.watcher.start()
@@ -422,9 +427,24 @@ class EqClipApp(rumps.App):
     def _handle_image(self, png_bytes):
         # Runs on the clipboard-poll thread -- do the (slow) network call on
         # its own thread so we never block polling or the main run loop.
+        if not self._processing_lock.acquire(blocking=False):
+            log.info("Already processing a screenshot -- ignoring this one for now")
+            AppHelper.callAfter(
+                rumps.notification,
+                "EqClip",
+                None,
+                "Still processing the previous screenshot -- try again shortly.",
+            )
+            return
         threading.Thread(
-            target=self._process_image, args=(png_bytes,), daemon=True
+            target=self._process_image_locked, args=(png_bytes,), daemon=True
         ).start()
+
+    def _process_image_locked(self, png_bytes):
+        try:
+            self._process_image(png_bytes)
+        finally:
+            self._processing_lock.release()
 
     def _show_failure_alert(self, message):
         # A notification banner alone is too easy to miss (auto-dismisses,

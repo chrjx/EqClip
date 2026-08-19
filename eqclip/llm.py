@@ -15,6 +15,8 @@ reply with the NOT_A_PAPER sentinel instead of transcribing garbage.
 """
 
 import base64
+import queue
+import threading
 import time
 
 import requests
@@ -60,7 +62,31 @@ class TranscriptionError(Exception):
 # doesn't stall the whole pipeline.
 KNOWN_GEMINI_MODELS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash"]
 
-_REQUEST_TIMEOUT_MS = 30_000  # bound a single attempt so we fail fast, not after minutes
+# Hard client-side cap per attempt, enforced ourselves in a daemon thread --
+# NOT via google-genai's http_options timeout, which has proven unreliable
+# in practice (observed 240s+ hangs in production despite a 30s configured
+# timeout; this is a known issue in the SDK's httpx handling). Using a
+# daemon thread means an abandoned/stuck call can never block app shutdown.
+_REQUEST_TIMEOUT_S = 30
+
+
+def _call_with_timeout(fn, timeout_s, *args, **kwargs):
+    result_q = queue.Queue(maxsize=1)
+
+    def _worker():
+        try:
+            result_q.put(("ok", fn(*args, **kwargs)))
+        except Exception as exc:  # noqa: BLE001 - forward any error to the caller
+            result_q.put(("error", exc))
+
+    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        kind, payload = result_q.get(timeout=timeout_s)
+    except queue.Empty:
+        raise TimeoutError(f"exceeded {timeout_s}s client-side timeout") from None
+    if kind == "error":
+        raise payload
+    return payload
 
 
 class GeminiTranscriber:
@@ -75,10 +101,7 @@ class GeminiTranscriber:
         from google.genai import types
 
         self._types = types
-        self._client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=_REQUEST_TIMEOUT_MS),
-        )
+        self._client = genai.Client(api_key=api_key)
         # Configured model first, then fall back to other free-tier models.
         self._models = [model] + [m for m in KNOWN_GEMINI_MODELS if m != model]
 
@@ -93,7 +116,9 @@ class GeminiTranscriber:
             )
             t0 = time.monotonic()
             try:
-                response = self._client.models.generate_content(
+                response = _call_with_timeout(
+                    self._client.models.generate_content,
+                    _REQUEST_TIMEOUT_S,
                     model=model,
                     contents=[
                         TRANSCRIBE_PROMPT,
@@ -102,6 +127,17 @@ class GeminiTranscriber:
                         ),
                     ],
                 )
+            except TimeoutError:
+                log.warning(
+                    "Gemini model %s exceeded %ds client-side timeout "
+                    "(request abandoned, may still complete in the background)",
+                    model,
+                    _REQUEST_TIMEOUT_S,
+                )
+                last_exc = TranscriptionError(
+                    f"{model} timed out after {_REQUEST_TIMEOUT_S}s"
+                )
+                continue
             except Exception as exc:  # noqa: BLE001 - surface any SDK error
                 elapsed = time.monotonic() - t0
                 log.warning(
