@@ -221,15 +221,32 @@ git push origin main v0.2.0
 The release workflow refuses to run if the tag doesn't match
 `eqclip/__version__.py`, to catch a forgotten version bump.
 
-**Note on `google-genai` + py2app**: the `google` package it installs
-under is a PEP 420 namespace package (no `__init__.py`), which py2app's
-bootstrap resolver can't handle directly (`ImportError: No module named
-'google'`). Both `install.sh` and `package.sh` (and so the CI workflows,
-which run it) work around this by touching an empty `__init__.py` into
-the installed `google/` directory before building, which is safe since
-`google.genai`/`google.auth`/
-`google.oauth2` keep their own real `__init__.py` files and resolve as
-subpackages exactly the same way either way.
+**Notes on `google-genai` + py2app** (a real dependency that's caused
+several py2app-specific bugs, all fixed in `setup.py`'s `packages`/
+`includes`, none reproducible in dev mode since that uses the venv's
+site-packages directly):
+- The `google` package it installs under is a PEP 420 namespace package
+  (no `__init__.py`), which py2app's bootstrap resolver can't handle
+  directly (`ImportError: No module named 'google'`). `install.sh` and
+  `package.sh` work around this by touching an empty `__init__.py` into
+  the installed `google/` directory before building, which is safe since
+  `google.genai`/`google.auth`/`google.oauth2` keep their own real
+  `__init__.py` files and resolve as subpackages exactly the same way
+  either way.
+- `google.auth` pulls in `cryptography` -> `cffi` even for plain API-key
+  auth, but modulegraph never traces `cffi`'s compiled `_cffi_backend`
+  extension, so it silently never made it into early builds -- crashing
+  with `No module named '_cffi_backend'` the instant `genai.Client()` was
+  constructed. Fixed by forcing `_cffi_backend` into `includes` and
+  bundling `cffi` as a full package.
+- `httpx` (used internally for the API calls) loads its TLS CA bundle via
+  `certifi.where()`, which returns a real filesystem path -- but py2app
+  zips any package not listed in `packages` into `python*.zip` by
+  default, and a path *inside* a zip archive can't be opened by normal
+  file APIs. This silently broke certificate verification, which
+  manifested as every single Gemini request hanging for the full
+  client-side timeout with no response at all, rather than a clear error.
+  Fixed by bundling `certifi` as a full package too.
 
 ## Troubleshooting
 

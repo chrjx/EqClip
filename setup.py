@@ -36,6 +36,13 @@ OPTIONS = {
         "requests",
         "eqclip",
         "cffi",
+        # httpx/requests load the CA bundle via certifi.where(), which
+        # returns a real filesystem path -- but py2app zips any package
+        # not listed here into python*.zip by default, and a path *inside*
+        # a zip archive can't be opened by normal file APIs. That silently
+        # breaks TLS certificate verification in the built app (while dev
+        # mode, using the venv's real certifi directory, works fine).
+        "certifi",
     ],
     # google.auth pulls in cryptography -> cffi at runtime (client-auth
     # setup, not just OAuth flows), but modulegraph's static analysis
